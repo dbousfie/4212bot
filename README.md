@@ -1,119 +1,122 @@
-# Syllabus Bot
+# Syllabus Bot (Azure OpenAI variant)
 
-Minimal open-source bot that answers course/assignment questions using OpenAI with `syllabus.md` as context. Runs on Cloudflare Workers with a static frontend on GitHub Pages. Embeds in Brightspace. Logs every query, response, and student feedback rating to Qualtrics for quality control.
+Same as the standard syllabus bot template, but uses Azure OpenAI instead of OpenAI's public API. Use this when course content involves student input that needs to stay within institutional infrastructure.
 
 ## How it works
 
 Three pieces, in two places:
 
 - **Frontend** (`index.html`) — hosted on GitHub Pages. Students see a web page, type a question, click submit, get an answer, and rate it 👍 or 👎.
-- **Backend** (`worker.js`) — runs on Cloudflare Workers. Receives each request, fetches `syllabus.md` from this GitHub repo at runtime, sends it to OpenAI with the question, returns the answer, and logs to Qualtrics.
-- **Content** (`syllabus.md`) — lives in this repo. The worker fetches a fresh copy on every request, so editing `syllabus.md` and committing immediately updates what the bot knows. No redeploy needed.
+- **Backend** (`worker.js`) — runs on Cloudflare Workers. Receives each request, fetches the syllabus from this GitHub repo at runtime, sends it to Azure OpenAI with the question, returns the answer, and logs to Qualtrics.
+- **Content** (`syllabus.md` or `syllabus.txt`) — lives in this repo. The worker fetches a fresh copy on every request, so editing the syllabus and committing immediately updates what the bot knows. No redeploy needed.
 
-**Where `worker.js` actually runs:** the running copy is stored in Cloudflare, not in this repo. The copy in this repo is your backup and template. When you change `worker.js`, the change that takes effect is the one you paste into Cloudflare's editor — that's what actually changes the running bot. Committing the same change to GitHub is just so you have a backup.
-
-For `syllabus.md` the opposite is true: editing it in GitHub *is* what changes behavior, because that's where the worker reads it from at runtime.
+The frontend, content workflow, and Qualtrics logging are identical to the OpenAI template. Only the LLM call differs.
 
 ## Setup
 
 ### 1. Create your repo
-Use this template on GitHub. Name it after your course (e.g., `syllabus-bot-3210`).
+Use this template on GitHub. Name it after your course.
 
-### 2. Edit `syllabus.md`
-Replace the contents with your course policies, grading criteria, deadlines, readings — anything you want the bot to know. Whatever's in this file gets sent to OpenAI as context with every question.
+### 2. Edit the syllabus file
+Replace the contents with your course policies, grading criteria, deadlines, readings — anything you want the bot to know.
 
 ### 3. Deploy the worker
+1. dash.cloudflare.com → **Compute (Workers)** → **Create** → **Start with Hello World!**
+2. Name your worker (e.g., `3210azurebot`).
+3. After it deploys, click **Edit code**.
+4. Ctrl+A → Delete (the editor must be completely empty before pasting), then paste `worker.js` from this repo.
+5. Click **Deploy**.
 
-Sign up free at https://dash.cloudflare.com — no credit card required.
-
-1. In the dashboard: **Compute (Workers)** → **Create** → **Start with Hello World!**
-2. Name your worker (e.g., `3210bot`). The name becomes part of your URL: `<name>.<your-subdomain>.workers.dev`.
-3. After it deploys, click **Edit code** (top right).
-4. **Clear the editor first.** Click in the code area, Ctrl+A (or Cmd+A on Mac), Delete. The editor must be completely empty before pasting — pasting over selected code can result in everything being commented out, leaving the worker stuck on Hello World.
-5. Open `worker.js` from this repo, copy all of it, paste into the empty editor.
-6. Click **Deploy** (top right, blue button).
-
-To verify the deploy: visit `https://<your-name>.<your-subdomain>.workers.dev` in a browser. You should see "Method Not Allowed" — that's correct (the worker only accepts POST requests). If you see "Hello World!" instead, the paste didn't take; redo from step 4.
+Verify: visit your worker URL in a browser. You should see "Method Not Allowed" — that's correct. If you see "Hello World!", the paste didn't take; redo step 4.
 
 ### 4. Set environment variables
 
-In the worker's page → **Settings** tab → scroll to **Variables and Secrets** → **+ Add** for each:
+In the worker's page → **Settings** → **Variables and Secrets** → **+ Add** (or click **Edit** to set multiple at once):
 
 | Name | Type | Required | Value |
 |---|---|---|---|
-| `OPENAI_API_KEY` | Secret | yes | Your OpenAI API key (`sk-...`) |
-| `SYLLABUS_URL` | Text | yes | Raw GitHub URL of this repo's `syllabus.md` |
+| `AZURE_OPENAI_KEY` | Secret | yes | Your Azure OpenAI API key |
+| `AZURE_ENDPOINT` | Text | yes | e.g., `https://chatbot-api-western.openai.azure.com` |
+| `AZURE_DEPLOYMENT_NAME` | Text | yes | The deployment name in your Azure resource (e.g., `gpt-4.1-mini`) |
+| `AZURE_API_VERSION` | Text | yes | e.g. `2025-04-01-preview` |
+| `SYLLABUS_URL` | Text | yes | Raw GitHub URL of this repo's syllabus file |
 | `COURSE_PAGE_URL` | Text | yes | Public course web page; appears at the bottom of every response |
 | `QUALTRICS_API_TOKEN` | Secret | for logging | |
 | `QUALTRICS_SURVEY_ID` | Text | for logging | starts with `SV_` |
 | `QUALTRICS_DATACENTER` | Text | for logging | e.g., `uwo.eu` |
-| `OPENAI_MODEL` | Text | optional | Defaults to `gpt-4o-mini` |
 
-For `SYLLABUS_URL`, the easiest way to get the right value: open `syllabus.md` in your repo on GitHub, click the **Raw** button, copy the URL from your browser's address bar. Format looks like:
-```
-https://raw.githubusercontent.com/<username>/<repo>/main/syllabus.md
-```
-Test it by pasting into a browser tab — you should see your syllabus text. If you get 404, the username, repo name, or branch is wrong.
+For `SYLLABUS_URL`: open the syllabus file in your repo on GitHub, click the **Raw** button, copy the URL from your browser. The worker accepts `.md` or `.txt` — whatever the URL points to.
 
-**Why Secret vs Text:** Secret values are encrypted in the dashboard and hidden after saving (you can replace them but never view them again). Text values stay visible. Use Secret for anything sensitive — API keys, tokens.
+**Where to find Azure values:**
+- `AZURE_ENDPOINT` and `AZURE_DEPLOYMENT_NAME` come from your Azure OpenAI resource. In the Azure portal: your resource → "Go to Azure OpenAI Studio" → Deployments → see the deployment name. The endpoint is on your resource's "Keys and Endpoint" page.
+- `AZURE_OPENAI_KEY` is on the same "Keys and Endpoint" page (Key 1 or Key 2).
 
-### 5. Configure Qualtrics (for logging and feedback)
+### 5. Configure Qualtrics
 
-In your Qualtrics survey, add three embedded data fields with these exact names:
+Add three embedded data fields to your Qualtrics survey:
 - `queryText`
 - `responseText`
 - `feedback`
 
-Each question creates one Qualtrics row (with `feedback` empty). Each thumbs-click creates a second row with the same query/response and a `feedback` value of either `helpful` or `not_helpful`. To find responses students flagged as bad, filter for `feedback = not_helpful`.
+Each question creates one Qualtrics row (with `feedback` empty). Each thumbs-click creates a second row with the same query/response and a `feedback` value of `helpful` or `not_helpful`. Filter for `feedback = not_helpful` to find responses that need a syllabus fix.
 
 ### 6. Point the frontend at your worker
 
-Open `index.html` in this repo. Near the top of the `<script>` block:
+In `index.html`, near the top of the `<script>` block:
 ```js
 const WORKER_URL = "https://<your-name>.<your-subdomain>.workers.dev/";
 ```
-Change the URL to your Cloudflare worker URL. Commit.
+Set this to your Cloudflare worker URL. Commit.
 
 ### 7. Publish the frontend
 - Repo → **Settings** → **Pages**
 - Branch: `main`, Folder: `/ (root)` → **Save**
-- Wait 1–2 minutes for the first build, then visit the published URL (e.g., `https://<username>.github.io/<repo>/`)
-- For Brightspace: paste `brightspace.html` as a content item or widget
+- Wait 1–2 minutes for the first build, then visit the published URL
+- For Brightspace: paste `brightspace.html` as a content item
 
 ## Day-to-day editing
 
+Same as the standard template:
+
 | Change | What to do | Live immediately? |
 |---|---|---|
-| Edit syllabus content | Edit `syllabus.md` in GitHub, commit | Yes, on next request |
+| Edit syllabus content | Edit syllabus file in GitHub, commit | Yes, on next request |
 | Update the course web link | Edit `COURSE_PAGE_URL` in Cloudflare dashboard | Yes |
-| Switch OpenAI model | Edit `OPENAI_MODEL` in dashboard | Yes |
-| Rotate any API key | Edit the Secret in dashboard | Yes |
-| Change frontend appearance/text | Edit `index.html` on GitHub | After GitHub Pages rebuilds (1–2 min) and after browser hard refresh |
+| Switch Azure deployment | Edit `AZURE_DEPLOYMENT_NAME` in dashboard | Yes |
+| Rotate the API key | Edit the `AZURE_OPENAI_KEY` Secret in dashboard | Yes |
+| Change frontend appearance | Edit `index.html` on GitHub | After GitHub Pages rebuilds (1–2 min) and a hard refresh |
 | Change prompt or backend logic | Edit `worker.js` in Cloudflare's editor → click **Deploy** | After Deploy click |
-
-GitHub Pages and browser caching can both delay seeing changes to `index.html`. After committing, give it 1–2 minutes, then hard-refresh (Ctrl+Shift+R / Cmd+Shift+R), or open in a private window.
 
 ## Reading feedback in Qualtrics
 
-In your survey's data viewer, filter `feedback` for `not_helpful`. Each row shows the query that produced the bad response and the response text itself. Use these to:
-- Identify gaps in your syllabus (the bot couldn't answer because the info wasn't there)
-- Identify confusing language (students asked things you thought were covered)
-- Identify outdated information (deadlines, policies you forgot to update)
+Filter the survey for `feedback = not_helpful` to see responses students flagged as bad. Each row shows the query that produced the response and the response text, useful for identifying:
+- Gaps in your syllabus (info wasn't there)
+- Confusing language students asked about
+- Outdated dates or policies
+
+## Why use this variant instead of the standard one
+
+The standard template uses OpenAI's public API. Use this Azure variant when:
+- Course activities involve student-generated content that should stay within institutional infrastructure
+- You need the procurement / data-handling agreements that come with your institution's Azure deployment
+- You want to use Azure-specific deployments (different model availability, fine-tuned versions, etc.)
+
+For policy/syllabus questions where students aren't submitting personal content, the standard OpenAI template is simpler and equally good.
 
 ## Notes
 
 - **CORS** is handled by the worker, so iframe and cross-domain calls from Brightspace and GitHub Pages work without extra config.
-- **Fetch caching is disabled** for syllabus reads (`cache: "no-store"`), so syllabus edits appear immediately. Cloudflare's default fetch caching would otherwise serve stale content — we explicitly opt out.
-- **Per-bot isolation:** each bot is its own Cloudflare Worker with its own env vars. API keys can differ between bots, which lets you track costs per course.
+- **Fetch caching is disabled** for syllabus reads (`cache: "no-store"`), so syllabus edits appear immediately.
+- **Per-bot isolation:** each bot is its own Cloudflare Worker with its own env vars. Azure keys can differ per bot for cost tracking.
 - **Token cap:** Responses are limited to 1500 tokens. Increase `max_tokens` in `worker.js` if needed (then redeploy).
-- **Free tier:** Cloudflare Workers free tier is 100,000 requests/day. No credit card required.
-- **Feedback clicks are free:** thumbs-up/down submissions don't call OpenAI, so they don't cost anything beyond the negligible Qualtrics API call.
+- **Free tier:** Cloudflare Workers free tier is 100,000 requests/day. Azure OpenAI billing is separate and depends on your institution's agreement.
+- **Feedback clicks are free:** thumbs-up/down submissions don't call Azure OpenAI, so they don't incur LLM costs.
 
 ## Files
 - `index.html` — public interface with feedback buttons
 - `brightspace.html` — LMS iframe wrapper
 - `worker.js` — Cloudflare Workers backend (running copy lives in Cloudflare; this is the backup)
-- `syllabus.md` — course content used as context
+- `syllabus.md` (or `syllabus.txt`) — course content used as context
 - `README.md` — this file
 
 ## License

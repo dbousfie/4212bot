@@ -1,21 +1,23 @@
-// worker.js — syllabus bot backend
+// worker.js — syllabus bot backend (Azure OpenAI variant)
 //
-// Receives a question from the frontend, fetches syllabus.md from GitHub,
-// asks OpenAI for an answer, optionally logs the exchange to Qualtrics.
+// Receives a question from the frontend, fetches the syllabus from GitHub,
+// asks Azure OpenAI for an answer, optionally logs the exchange to Qualtrics.
 //
 // Also handles feedback submissions: if the request body contains a "feedback"
-// field, the worker logs it to Qualtrics and skips OpenAI. This is used by
-// the thumbs-up / thumbs-down buttons in index.html.
+// field, the worker logs it to Qualtrics and skips the LLM call. This is used
+// by the thumbs-up / thumbs-down buttons in index.html.
 //
 // Required environment variables (Cloudflare → Settings → Variables and Secrets):
 //
-//   OPENAI_API_KEY        (Secret)  required
+//   AZURE_OPENAI_KEY      (Secret)  required, Azure OpenAI API key
+//   AZURE_ENDPOINT        (Text)    required, e.g. https://chatbot-api-western.openai.azure.com
+//   AZURE_DEPLOYMENT_NAME (Text)    required, e.g. gpt-4.1-mini (the deployment name in your Azure resource)
+//   AZURE_API_VERSION     (Text)    optional, defaults to 2024-04-01-preview
 //   QUALTRICS_API_TOKEN   (Secret)  optional, needed for logging
 //   QUALTRICS_SURVEY_ID   (Text)    optional, needed for logging
-//   QUALTRICS_DATACENTER  (Text)    optional, e.g. "uwo.eu"
+//   QUALTRICS_DATACENTER  (Text)    optional, e.g. uwo.eu
 //   COURSE_PAGE_URL       (Text)    public course web page shown in every response
-//   OPENAI_MODEL          (Text)    optional, defaults to gpt-4o-mini
-//   SYLLABUS_URL          (Text)    raw GitHub URL of this bot's syllabus.md
+//   SYLLABUS_URL          (Text)    raw GitHub URL of this bot's syllabus (.md or .txt)
 //                                   e.g. https://raw.githubusercontent.com/USER/REPO/main/syllabus.md
 //
 // Qualtrics survey must have three embedded data fields:
@@ -29,12 +31,14 @@ const corsHeaders = {
 
 export default {
   async fetch(req, env) {
-    const OPENAI_API_KEY = env.OPENAI_API_KEY;
+    const AZURE_OPENAI_KEY = env.AZURE_OPENAI_KEY;
+    const AZURE_ENDPOINT = env.AZURE_ENDPOINT;
+    const AZURE_DEPLOYMENT_NAME = env.AZURE_DEPLOYMENT_NAME;
+    const AZURE_API_VERSION = env.AZURE_API_VERSION || "2024-04-01-preview";
     const QUALTRICS_API_TOKEN = env.QUALTRICS_API_TOKEN;
     const QUALTRICS_SURVEY_ID = env.QUALTRICS_SURVEY_ID;
     const QUALTRICS_DATACENTER = env.QUALTRICS_DATACENTER;
     const COURSE_PAGE_URL = env.COURSE_PAGE_URL || "";
-    const OPENAI_MODEL = env.OPENAI_MODEL || "gpt-4o-mini";
     const SYLLABUS_URL = env.SYLLABUS_URL;
 
     // CORS preflight
@@ -77,7 +81,7 @@ export default {
       }
     }
 
-    // Feedback path: short-circuit before any OpenAI call.
+    // Feedback path: short-circuit before any LLM call.
     // Frontend sends { query, responseText, feedback: "helpful" | "not_helpful" }
     if (body.feedback) {
       const status = await logToQualtrics({
@@ -91,15 +95,18 @@ export default {
     }
 
     // Question path
-    if (!OPENAI_API_KEY) {
-      return new Response("Missing OpenAI API key. Check Cloudflare Variables and Secrets.", { status: 500, headers: corsHeaders });
+    if (!AZURE_OPENAI_KEY) {
+      return new Response("Missing AZURE_OPENAI_KEY. Check Cloudflare Variables and Secrets.", { status: 500, headers: corsHeaders });
+    }
+    if (!AZURE_ENDPOINT || !AZURE_DEPLOYMENT_NAME) {
+      return new Response("Missing AZURE_ENDPOINT or AZURE_DEPLOYMENT_NAME.", { status: 500, headers: corsHeaders });
     }
     if (!SYLLABUS_URL) {
-      return new Response("Missing SYLLABUS_URL. Check Cloudflare Variables and Secrets.", { status: 500, headers: corsHeaders });
+      return new Response("Missing SYLLABUS_URL.", { status: 500, headers: corsHeaders });
     }
 
     // Load syllabus from GitHub. cache: "no-store" forces a fresh fetch every
-    // time, so edits to syllabus.md appear immediately without redeploying.
+    // time, so edits to the syllabus appear immediately without redeploying.
     const syllabus = await fetch(SYLLABUS_URL, { cache: "no-store" })
       .then(r => r.text())
       .catch(() => "Error loading syllabus.");
@@ -111,7 +118,7 @@ export default {
       },
       {
         role: "system",
-        content: `Here is important context from syllabus.md:\n${syllabus}`,
+        content: `Here is important context from the syllabus:\n${syllabus}`,
       },
       {
         role: "user",
@@ -119,21 +126,21 @@ export default {
       },
     ];
 
-    const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+    const azureUrl = `${AZURE_ENDPOINT}/openai/deployments/${AZURE_DEPLOYMENT_NAME}/chat/completions?api-version=${AZURE_API_VERSION}`;
+    const azureResponse = await fetch(azureUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "api-key": AZURE_OPENAI_KEY,
       },
       body: JSON.stringify({
-        model: OPENAI_MODEL,
         messages,
         max_tokens: 1500,
       }),
     });
 
-    const openaiJson = await openaiResponse.json();
-    const baseResponse = openaiJson?.choices?.[0]?.message?.content || "No response from OpenAI";
+    const azureJson = await azureResponse.json();
+    const baseResponse = azureJson?.choices?.[0]?.message?.content || "No response from Azure OpenAI";
     const result = `${baseResponse}\n\nThere may be errors in my responses; always refer to the course web page: ${COURSE_PAGE_URL}`;
 
     const qualtricsStatus = await logToQualtrics({
